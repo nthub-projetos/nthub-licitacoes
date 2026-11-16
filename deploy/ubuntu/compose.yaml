@@ -1,0 +1,108 @@
+name: nthub_licitacoes_teste
+x-app: &app
+  image: nthub-licitacoes-teste-api:local
+  build:
+    context: ../..
+    dockerfile: deploy/ubuntu/Dockerfile
+    target: app
+  env_file: ../../.env
+  environment:
+    DATABASE_URL: postgres://nthub:${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}@database:5432/nthub
+    REDIS_URL: redis://redis:6379
+    APP_URL: ${APP_URL:?Configure APP_URL}
+    HOST: 0.0.0.0
+    PORT: 3001
+    # Compiled application, LAN-only test environment with HTTP cookies.
+    NODE_ENV: test
+    S3_ENDPOINT: ''
+    S3_BUCKET: ''
+    S3_ACCESS_KEY: ''
+    S3_SECRET_KEY: ''
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: nthub
+      POSTGRES_DB: nthub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U nthub -d nthub']
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 768m
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 384m
+  restore:
+    image: postgres:17-alpine
+    environment:
+      PGHOST: database
+      PGUSER: nthub
+      PGDATABASE: nthub
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [../../backup:/backup:ro]
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        if [ "$$(psql -Atc "SELECT to_regclass('public.organizations') IS NOT NULL")" = "t" ]; then
+          echo 'Banco do NTHUB já existe; restauração ignorada.'
+        else
+          pg_restore --single-transaction --exit-on-error --no-owner --no-acl -d nthub /backup/database.dump
+          echo 'Cópia dos dados restaurada no banco exclusivo do NTHUB.'
+        fi
+    depends_on:
+      database: {condition: service_healthy}
+  init:
+    <<: *app
+    command: [sh, -ec, 'pnpm --filter @nthub/api exec tsx src/migrate.ts && node deploy/ubuntu/bootstrap.mjs']
+    volumes: [../../backup:/backup:ro]
+    depends_on:
+      restore: {condition: service_completed_successfully}
+  api:
+    <<: *app
+    command: [node, apps/api/dist/server.js]
+    depends_on:
+      init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      start_period: 20s
+      retries: 12
+    restart: unless-stopped
+    mem_limit: 768m
+  worker:
+    <<: *app
+    command: [node, apps/api/dist/worker.js]
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 1536m
+    cpus: 1.0
+  web:
+    image: nthub-licitacoes-teste-web:local
+    build:
+      context: ../..
+      dockerfile: deploy/ubuntu/Dockerfile
+      target: web
+    ports: ['${BIND_IP:-127.0.0.1}:${HTTP_PORT:-8088}:80']
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1/api/v1/health']
+      interval: 10s
+      retries: 12
+    restart: unless-stopped
+    mem_limit: 128m
+volumes:
+  postgres-data:
+  redis-data:

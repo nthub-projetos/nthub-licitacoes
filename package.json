@@ -1,0 +1,26 @@
+{
+  "name": "nthub-licitacoes",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web \"pnpm --filter @nthub/api dev\" \"pnpm --filter @nthub/web dev\"",
+    "worker": "pnpm --filter @nthub/api worker",
+    "db:migrate": "pnpm --filter @nthub/api migrate",
+    "db:seed": "pnpm --filter @nthub/api seed",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "test": "pnpm --filter @nthub/api test",
+    "setup:local": "node scripts/setup-local.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.2.1",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.10.0",
+    "typescript": "^5.9.3"
+  }
+}

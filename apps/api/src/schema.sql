@@ -1,0 +1,33 @@
+CREATE TABLE IF NOT EXISTS organizations(id uuid PRIMARY KEY, name text NOT NULL);
+CREATE TABLE IF NOT EXISTS companies(id uuid PRIMARY KEY, organization_id uuid NOT NULL REFERENCES organizations(id), name text NOT NULL, cnpj text, capabilities jsonb NOT NULL, UNIQUE(id, organization_id));
+CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY, organization_id uuid NOT NULL REFERENCES organizations(id), company_id uuid NOT NULL, email text UNIQUE NOT NULL, password_hash text NOT NULL, FOREIGN KEY(company_id,organization_id) REFERENCES companies(id,organization_id));
+CREATE TABLE IF NOT EXISTS sessions(token_hash text PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), expires_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS procurements(id uuid PRIMARY KEY, source_id text UNIQUE NOT NULL, title text NOT NULL, agency text NOT NULL, uf text, city text, value numeric(18,2), deadline timestamptz, source_url text NOT NULL, raw jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS opportunities(id uuid PRIMARY KEY, organization_id uuid NOT NULL REFERENCES organizations(id), company_id uuid NOT NULL, procurement_id uuid NOT NULL REFERENCES procurements(id), status text NOT NULL DEFAULT 'new' CHECK(status IN ('new','review','selected','discarded','submitted','won','lost')), score integer NOT NULL CHECK(score BETWEEN 0 AND 100), matches jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(company_id,procurement_id), UNIQUE(id,organization_id,company_id), FOREIGN KEY(company_id,organization_id) REFERENCES companies(id,organization_id));
+CREATE TABLE IF NOT EXISTS documents(id uuid PRIMARY KEY, organization_id uuid NOT NULL, company_id uuid NOT NULL, opportunity_id uuid NOT NULL, name text NOT NULL, hash text NOT NULL, pages jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(opportunity_id,organization_id,company_id) REFERENCES opportunities(id,organization_id,company_id));
+CREATE TABLE IF NOT EXISTS analyses(id uuid PRIMARY KEY, organization_id uuid NOT NULL, company_id uuid NOT NULL, opportunity_id uuid NOT NULL, document_id uuid NOT NULL REFERENCES documents(id), result jsonb NOT NULL, model text NOT NULL, prompt_version text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(opportunity_id,organization_id,company_id) REFERENCES opportunities(id,organization_id,company_id));
+CREATE TABLE IF NOT EXISTS audit_logs(id uuid PRIMARY KEY, organization_id uuid NOT NULL, company_id uuid NOT NULL, user_id uuid, action text NOT NULL, resource_id text, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS outbox(id uuid PRIMARY KEY, type text NOT NULL, payload jsonb NOT NULL, published_at timestamptz, created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS opportunities_scope ON opportunities(organization_id,company_id);
+CREATE INDEX IF NOT EXISTS documents_scope ON documents(organization_id,company_id,opportunity_id);
+CREATE INDEX IF NOT EXISTS analyses_scope ON analyses(organization_id,company_id,opportunity_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_scope ON audit_logs(organization_id,company_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(created_at) WHERE published_at IS NULL;
+ALTER TABLE procurements ADD COLUMN IF NOT EXISTS items jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS processing_state text NOT NULL DEFAULT 'pending';
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS processing_error text;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS processing_job_id uuid;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS synced_at timestamptz;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_key text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_url text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS content bytea;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS mime text NOT NULL DEFAULT 'application/pdf';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_status text NOT NULL DEFAULT 'ready';
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS extraction_error text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS document_set_hash text;
+CREATE UNIQUE INDEX IF NOT EXISTS documents_source_unique ON documents(opportunity_id,source_key) WHERE source_key IS NOT NULL;
+
+-- Repair JSON serialized twice by the first prototype.
+UPDATE procurements SET raw=(raw#>>'{}')::jsonb WHERE jsonb_typeof(raw)='string';
+UPDATE procurements SET items=(items#>>'{}')::jsonb WHERE jsonb_typeof(items)='string';
