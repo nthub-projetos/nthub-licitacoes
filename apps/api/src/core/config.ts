@@ -7,6 +7,7 @@ export const config = z
     GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
     PORT: z.coerce.number().default(3001),
     HOST: z.string().default('127.0.0.1'),
+    TRUSTED_PROXY_CIDRS: z.string().default(''),
     APP_URL: z.string().url().default('http://127.0.0.1:5173'),
     S3_ENDPOINT: z.string().default(''),
     S3_BUCKET: z.string().default(''),

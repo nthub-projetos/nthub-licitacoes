@@ -39,6 +39,15 @@ export async function runSchedules() {
         }
       }
       await tx`UPDATE collection_schedules SET next_run_at=now()+(${schedule.interval_minutes}*interval '1 minute') WHERE id=${schedule.id}`;
+      // Revisit tracked notices regardless of original publication date, once per scheduled cycle.
+      // Locked/queued opportunities are left to their current job to avoid overlapping work.
+      const tracked =
+        await tx`SELECT id FROM opportunities WHERE organization_id=${schedule.organization_id} AND company_id=${schedule.company_id} AND status NOT IN ('won','lost','discarded') AND processing_state NOT IN ('queued','processing') FOR UPDATE SKIP LOCKED`;
+      for (const op of tracked) {
+        const jobId = randomUUID();
+        await tx`INSERT INTO outbox(id,type,payload) VALUES(${jobId},'refresh',${tx.json({ tenant: { organizationId: schedule.organization_id, companyId: schedule.company_id, userId: schedule.created_by, email: schedule.email }, opportunityId: op.id, scheduled: true })})`;
+        await tx`UPDATE opportunities SET processing_state='queued',processing_job_id=${jobId} WHERE id=${op.id}`;
+      }
     }
   });
 }

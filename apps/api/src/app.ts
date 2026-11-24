@@ -1,4 +1,5 @@
 import { oidcRoutes } from './modules/identity/oidc.js';
+import { opportunityPage } from './modules/opportunities/catalog.js';
 import { passwordResetRoutes } from './modules/identity/password-reset.js';
 import { loadBlob } from './core/storage.js';
 import Fastify from 'fastify';
@@ -22,7 +23,7 @@ import { queue } from './core/queue.js';
 import {
   authenticate,
   hashToken,
-  verifyPassword,
+  verifyLoginCredentials,
   accessibleCompanies,
   requirePermission,
   requireGroupAdmin,
@@ -40,6 +41,9 @@ import {
 const idSchema = z.object({ id: z.uuid() });
 export async function buildApp() {
   const app = Fastify({
+    trustProxy: config.TRUSTED_PROXY_CIDRS.split(',')
+      .map((v) => v.trim())
+      .filter(Boolean),
     logger: {
       redact: [
         'req.headers.cookie',
@@ -192,15 +196,11 @@ export async function buildApp() {
       const passwordChangeRequired = await sql.begin(async (tx) => {
         const [user] =
           await tx`SELECT * FROM users WHERE email=${body.email.toLowerCase()} FOR UPDATE`;
-        if (!user || !user.active)
-          throw httpError(401, 'E-mail ou senha inválidos.');
-        const regular = verifyPassword(body.password, user.password_hash);
-        const temporary =
-          !regular &&
-          user.temporary_password_hash &&
-          new Date(user.temporary_password_expires_at).getTime() > Date.now() &&
-          verifyPassword(body.password, user.temporary_password_hash);
-        if (!regular && !temporary)
+        const { regular, temporary } = verifyLoginCredentials(
+          body.password,
+          user as Parameters<typeof verifyLoginCredentials>[1],
+        );
+        if (!user || !user.active || (!regular && !temporary))
           throw httpError(401, 'E-mail ou senha inválidos.');
         const [firstCompany] =
           await tx`SELECT c.id FROM companies c LEFT JOIN memberships m ON m.company_id=c.id AND m.organization_id=c.organization_id AND m.user_id=${user.id} AND m.active WHERE c.organization_id=${user.organization_id} AND c.active AND (${user.group_role === 'group_admin'} OR m.user_id IS NOT NULL) ORDER BY (c.id=${user.company_id}) DESC,c.is_parent DESC,c.name LIMIT 1`;
@@ -245,6 +245,21 @@ export async function buildApp() {
   app.get('/api/v1/opportunities', async (req) =>
     listOpportunities(await authenticate(req)),
   );
+  app.get('/api/v1/opportunities/page', async (req) =>
+    opportunityPage(await authenticate(req), req.query),
+  );
+  app.get('/api/v1/opportunities/:id', async (req) => {
+    const t = await authenticate(req);
+    const { id } = idSchema.parse(req.params);
+    await requireOpportunity(t, id);
+    const { sql: q } = await import('drizzle-orm');
+    const rows = await listOpportunities(t, {
+      where: q`o.id=${id} AND o.organization_id=${t.organizationId} AND o.company_id=${t.companyId}`,
+      limit: 1,
+      offset: 0,
+    });
+    return rows[0];
+  });
   app.patch('/api/v1/opportunities/:id/status', async (req) => {
     const t = await authenticate(req);
     const { id } = idSchema.parse(req.params);
@@ -402,7 +417,7 @@ export async function buildApp() {
   app.post('/api/v1/opportunities/:id/refresh', async (req, reply) => {
     const t = await authenticate(req);
     const { id } = idSchema.parse(req.params);
-    const jobId = await enqueueEnrichment(t, id);
+    const jobId = await enqueueEnrichment(t, id, true);
     return reply.code(202).send({ jobId });
   });
   app.get('/api/v1/documents/:id/file', async (req, reply) => {

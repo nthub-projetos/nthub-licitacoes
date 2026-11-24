@@ -1,4 +1,10 @@
 import { Worker, DelayedError } from 'bullmq';
+import {
+  passwordResetQueueName,
+  closePasswordResetQueue,
+} from './core/password-reset-queue.js';
+import { deliverPasswordReset } from './modules/identity/reset-delivery.js';
+import { refreshTrackedOpportunity } from './modules/sources/refresh.js';
 import { SourceThrottleError } from './modules/sources/http.js';
 import { z } from 'zod';
 import { sql, drizzleClient } from './core/db.js';
@@ -57,12 +63,16 @@ const worker = new Worker(
           ? 'sources:sync'
           : job.name === 'rematch'
             ? 'company:manage'
-            : ['enrich', 'analyze'].includes(job.name)
-              ? tenant.authKind === 'api_token' &&
-                tenant.scopes?.includes('sources:sync')
+            : job.name === 'refresh'
+              ? payload.scheduled === true
                 ? 'sources:sync'
-                : 'documents:write'
-              : 'company:read';
+                : 'opportunities:write'
+              : ['enrich', 'analyze'].includes(job.name)
+                ? tenant.authKind === 'api_token' &&
+                  tenant.scopes?.includes('sources:sync')
+                  ? 'sources:sync'
+                  : 'documents:write'
+                : 'company:read';
     await authorizeBackground(tenant, permission);
     if (job.name === 'analyze')
       await authorizeBackground(tenant, 'opportunities:write');
@@ -72,7 +82,7 @@ const worker = new Worker(
       if (job.name === 'collect')
         result = await collect(payload.input, tenant, job.id!);
       else if (job.name === 'rematch') result = await rematchCatalog(tenant);
-      else if (job.name === 'enrich' || job.name === 'analyze') {
+      else if (['enrich', 'analyze', 'refresh'].includes(job.name)) {
         if (job.name === 'analyze' && payload.requestedByUser !== true)
           throw new Error(
             'A análise por IA exige uma solicitação explícita do usuário.',
@@ -81,9 +91,11 @@ const worker = new Worker(
           .object({ opportunityId: z.uuid() })
           .parse(payload);
         result =
-          job.name === 'enrich'
-            ? await enrichOpportunity(tenant, opportunityId)
-            : await analyzeOpportunity(tenant, opportunityId);
+          job.name === 'refresh'
+            ? await refreshTrackedOpportunity(tenant, opportunityId)
+            : job.name === 'enrich'
+              ? await enrichOpportunity(tenant, opportunityId)
+              : await analyzeOpportunity(tenant, opportunityId);
       } else if (job.name === 'domain.event') {
         const event = z
           .object({
@@ -129,6 +141,18 @@ const worker = new Worker(
     }
   },
   { connection: redisConnection, concurrency: 2 },
+);
+const resetWorker = new Worker(
+  passwordResetQueueName,
+  async (job) => {
+    if (job.name !== 'send')
+      throw new Error('Trabalho de recuperação inválido.');
+    return deliverPasswordReset(job.data);
+  },
+  { connection: redisConnection, concurrency: 2 },
+);
+resetWorker.on('failed', (job) =>
+  console.error('Falha na recuperação de senha. Verifique o SMTP.', job?.id),
 );
 let closing = false;
 let dispatchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -187,6 +211,8 @@ async function close() {
   clearTimeout(dispatchTimer);
   clearTimeout(scheduleTimer);
   await worker.close();
+  await resetWorker.close();
+  await closePasswordResetQueue();
   await queue.close();
   await sql.end();
   await drizzleClient.end();

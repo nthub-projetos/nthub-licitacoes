@@ -66,6 +66,8 @@ type Metrics = {
   won: number;
   lost: number;
   estimatedPipeline: string;
+  expired: number;
+  unknownDeadline: number;
   upcomingDeadlines: number;
   byStatus: { status: string; count: number }[];
   byUf: { uf: string; count: number }[];
@@ -352,7 +354,8 @@ onMounted(() => void run(load));
     <template v-if="section === 'reports' && metrics"
       ><div class="group-summary">
         <article>
-          <span>Oportunidades ativas</span><strong>{{ metrics.active }}</strong>
+          <span>Oportunidades com prazo vigente</span
+          ><strong>{{ metrics.active }}</strong>
         </article>
         <article>
           <span>Selecionadas</span><strong>{{ metrics.selected }}</strong>

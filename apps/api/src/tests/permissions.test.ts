@@ -338,7 +338,7 @@ describe('Perfis personalizados e permissões por empresa', () => {
       [procurement, opportunity, company, 1000],
       [otherProcurement, otherOpportunity, sibling, 2500],
     ] as const) {
-      await sql`INSERT INTO procurements(id,source_id,title,agency,value,source_url,raw) VALUES(${pid},${'DISCARD-TEST-' + org + pid},'Test discard','Test',${value},'https://pncp.gov.br','{}')`;
+      await sql`INSERT INTO procurements(id,source_id,title,agency,value,deadline,source_url,raw) VALUES(${pid},${'DISCARD-TEST-' + org + pid},'Test discard','Test',${value},now()+interval '5 days','https://pncp.gov.br','{}')`;
       await sql`INSERT INTO opportunities(id,organization_id,company_id,procurement_id,score,matches) VALUES(${oid},${org},${cid},${pid},0,'[]')`;
     }
     const url = '/api/v1/opportunities/' + opportunity + '/status';

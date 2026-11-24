@@ -3,7 +3,12 @@ import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 vi.mock('../modules/identity/reset-mail.js', () => ({
   sendTemporaryPassword: vi.fn(),
 }));
+vi.mock('../core/password-reset-queue.js', () => ({
+  enqueuePasswordReset: vi.fn(async () => {}),
+}));
 import { sendTemporaryPassword } from '../modules/identity/reset-mail.js';
+import { enqueuePasswordReset } from '../core/password-reset-queue.js';
+import { deliverPasswordReset } from '../modules/identity/reset-delivery.js';
 import { buildApp } from '../app.js';
 import { sql, drizzleClient } from '../core/db.js';
 import { queue } from '../core/queue.js';
@@ -30,8 +35,18 @@ const request = (
     remoteAddress: `127.0.1.${ip}`,
     headers: { 'x-nthub-request': '1', cookie },
   });
-const forgot = (address = email) =>
+const submitForgot = (address = email) =>
   request('POST', '/auth/forgot-password', { email: address });
+const forgot = async (address = email) => {
+  const result = await submitForgot(address);
+  if (result.statusCode === 200) {
+    // Simulate the separate worker, preserving the full delivery behavior tests below.
+    await deliverPasswordReset({
+      email: vi.mocked(enqueuePasswordReset).mock.calls.at(-1)![0],
+    }).catch(() => {});
+  }
+  return result;
+};
 const login = (password: string) =>
   request('POST', '/auth/login', { email, password });
 const sessionCookie = (r: { headers: Record<string, unknown> }) =>
@@ -54,6 +69,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   ip++;
   send.mockReset();
+  vi.mocked(enqueuePasswordReset).mockClear();
   send.mockResolvedValue(undefined);
   await sql`DELETE FROM sessions WHERE user_id=${user}`;
   await sql`UPDATE users SET active=true,password_hash=${hashPassword(original)},temporary_password_hash=NULL,temporary_password_expires_at=NULL,password_reset_requested_at=NULL,reset_used_password_hash=NULL WHERE id=${user}`;
@@ -188,4 +204,79 @@ it('replaces a previous temporary password and invalidates an unfinished reset s
   expect((await complete(cookie)).statusCode).toBe(401);
   expect((await login(first)).statusCode).toBe(401);
   expect((await login(temporary())).statusCode).toBe(200);
+});
+
+it('responds uniformly and only enqueues an email, without consulting SMTP on the public request', async () => {
+  const known = await submitForgot();
+  const unknown = await submitForgot('absent@example.invalid');
+  await sql`UPDATE users SET active=false WHERE id=${user}`;
+  const inactive = await submitForgot();
+  expect(known.statusCode).toBe(200);
+  expect(known.json()).toEqual(unknown.json());
+  expect(known.json()).toEqual(inactive.json());
+  expect(send).not.toHaveBeenCalled();
+  expect(vi.mocked(enqueuePasswordReset).mock.calls).toEqual([
+    [email],
+    ['absent@example.invalid'],
+    [email],
+  ]);
+  const [row] =
+    await sql`SELECT temporary_password_hash FROM users WHERE id=${user}`;
+  expect(row?.temporary_password_hash).toBeNull();
+});
+
+it('does not block login on slow SMTP and does not persist the password before delivery', async () => {
+  let release!: () => void;
+  send.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const delivery = deliverPasswordReset({ email });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const result = await Promise.race([
+      login(original),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Login blocked behind SMTP')),
+          2000,
+        );
+      }),
+    ]);
+    expect(result.statusCode).toBe(200);
+    const [row] =
+      await sql`SELECT temporary_password_hash FROM users WHERE id=${user}`;
+    expect(row?.temporary_password_hash).toBeNull();
+  } finally {
+    clearTimeout(timeout);
+    release?.();
+    await delivery;
+  }
+  expect((await login(temporary())).json().passwordChangeRequired).toBe(true);
+});
+
+it('does not publish a temporary credential if the password changed while SMTP was in flight', async () => {
+  let release!: () => void;
+  send.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const delivery = deliverPasswordReset({ email });
+  try {
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    await sql`UPDATE users SET password_hash=${hashPassword('Changed-during-delivery-123')} WHERE id=${user}`;
+  } finally {
+    release?.();
+    await delivery;
+  }
+  const [row] =
+    await sql`SELECT temporary_password_hash FROM users WHERE id=${user}`;
+  expect(row?.temporary_password_hash).toBeNull();
+  expect((await login(temporary())).statusCode).toBe(401);
+  expect((await login('Changed-during-delivery-123')).statusCode).toBe(200);
 });

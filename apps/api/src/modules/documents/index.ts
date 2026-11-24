@@ -3,6 +3,7 @@ import {
   calculateAdherence,
   companyFacts,
 } from '../intelligence/adherence.js';
+import { processingIssues } from './issues.js';
 import { SourceThrottleError } from '../sources/http.js';
 import { storeBlob, loadBlob } from '../../core/storage.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -20,7 +21,11 @@ import {
   sanitizeExtractedText,
 } from './extract.js';
 
-export async function enqueueEnrichment(t: Tenant, id: string) {
+export async function enqueueEnrichment(
+  t: Tenant,
+  id: string,
+  refreshMetadata = false,
+) {
   await requireOpportunity(t, id);
   return sql.begin(async (tx) => {
     const [op] =
@@ -32,7 +37,7 @@ export async function enqueueEnrichment(t: Tenant, id: string) {
     )
       return op.processing_job_id as string;
     const jobId = randomUUID();
-    await tx`INSERT INTO outbox(id,type,payload) VALUES(${jobId},'enrich',${tx.json({ opportunityId: id, tenant: t })})`;
+    await tx`INSERT INTO outbox(id,type,payload) VALUES(${jobId},${refreshMetadata ? 'refresh' : 'enrich'},${tx.json({ opportunityId: id, tenant: t })})`;
     await tx`UPDATE opportunities SET processing_state='queued',processing_error=NULL,processing_job_id=${jobId} WHERE id=${id} AND organization_id=${t.organizationId} AND company_id=${t.companyId}`;
     return jobId;
   });
@@ -364,6 +369,11 @@ export async function opportunityContent(t: Tenant, id: string) {
     items: p?.items || [],
     documents: docs.map(({ hash, ...doc }) => doc),
     processingState: op.processing_state,
+    sourceChangedAt: op.source_changed_at,
+    issues: processingIssues(
+      op.processing_state,
+      docs.map((d) => ({ extractionStatus: String(d.extractionStatus) })),
+    ),
     processingError: op.processing_error,
     syncedAt: op.synced_at,
     analysis: analysis?.result || null,

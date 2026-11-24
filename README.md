@@ -35,6 +35,6 @@ Instruções completas, perfis, implantação, backups e limites: [Operação](d
 
 O catálogo integra PNCP e Compras.gov.br (Lei 14.133), com deduplicação por número de controle. Consultas compartilham cache e limites entre empresas; erros 429 geram espera automática com Retry-After e retomada de checkpoint. Documentos e itens são obtidos automaticamente do PNCP; upload de edital não faz parte do fluxo normal. A IA fundamenta achados em trechos identificados por documento/página, com revisão humana. Novos originais podem usar S3 compatível (Garage local); legados no banco continuam acessíveis.
 
-CRM por empresa em `/crm`, atualizado a cada quatro segundos, com etapas, responsáveis e acesso aos documentos da oportunidade. A aderência v2 apresenta critérios, justificativas e cobertura; pendências de comprovação mantêm o resultado geral inconclusivo.
+CRM por empresa em `/crm`, com atualização manual da tela e coletas na frequência configurada, com etapas, responsáveis e acesso aos documentos da oportunidade. A aderência v2 apresenta critérios, justificativas e cobertura; pendências de comprovação mantêm o resultado geral inconclusivo.
 
 A NTHUB é o ambiente de gestão, com indicadores consolidados filtráveis. Fontes, integrações e atividades ficam em Configurações. Propostas e contatos pertencem à linha do tempo de cada oportunidade. A IA, inclusive OCR Gemini, só roda por solicitação manual no portal; as coletas não consomem tokens de IA.
