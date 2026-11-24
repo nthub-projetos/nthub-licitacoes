@@ -68,7 +68,8 @@ export async function sourceRoutes(app: FastifyInstance) {
       })
       .parse(req.body);
     await sql.begin(async (tx) => {
-      await tx`INSERT INTO collection_schedules(id,organization_id,company_id,enabled,interval_minutes,modalities,ufs,lookback_days,created_by,sources) VALUES(${randomUUID()},${t.organizationId},${t.companyId},${body.enabled},${body.intervalMinutes},${tx.json([...new Set(body.modalities)])},${tx.json([...new Set(body.ufs)])},${body.lookbackDays},${t.userId},${tx.json([...new Set(body.sources)])}) ON CONFLICT(company_id) DO UPDATE SET sources=EXCLUDED.sources,enabled=EXCLUDED.enabled,interval_minutes=EXCLUDED.interval_minutes,modalities=EXCLUDED.modalities,ufs=EXCLUDED.ufs,lookback_days=EXCLUDED.lookback_days,created_by=EXCLUDED.created_by,next_run_at=now()`;
+      // Saving config schedules the next cycle; immediate collection is a separate action.
+      await tx`INSERT INTO collection_schedules(id,organization_id,company_id,enabled,interval_minutes,modalities,ufs,lookback_days,created_by,sources,next_run_at) VALUES(${randomUUID()},${t.organizationId},${t.companyId},${body.enabled},${body.intervalMinutes},${tx.json([...new Set(body.modalities)])},${tx.json([...new Set(body.ufs)])},${body.lookbackDays},${t.userId},${tx.json([...new Set(body.sources)])},now()+(${body.intervalMinutes}*interval '1 minute')) ON CONFLICT(company_id) DO UPDATE SET sources=EXCLUDED.sources,enabled=EXCLUDED.enabled,interval_minutes=EXCLUDED.interval_minutes,modalities=EXCLUDED.modalities,ufs=EXCLUDED.ufs,lookback_days=EXCLUDED.lookback_days,created_by=EXCLUDED.created_by,next_run_at=EXCLUDED.next_run_at`;
       await tx`INSERT INTO audit_logs(id,organization_id,company_id,user_id,action,resource_id,details) VALUES(${randomUUID()},${t.organizationId},${t.companyId},${t.userId},'source:schedule-updated',${t.companyId},${tx.json(body)})`;
     });
     return { ok: true };

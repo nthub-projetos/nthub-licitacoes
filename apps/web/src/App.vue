@@ -49,6 +49,8 @@ import type {
 } from '@nthub/contracts';
 import { hasPermission } from '@nthub/contracts';
 import { api, setApiCompany } from './api';
+import PasswordRecovery from './modules/PasswordRecovery.vue';
+const recoveryMode = ref<'forgot' | 'required' | null>(null);
 const Permissions = defineAsyncComponent(
   () => import('./modules/Permissions.vue'),
 );
@@ -608,11 +610,19 @@ async function run(fn: () => Promise<void>) {
 }
 async function login() {
   await run(async () => {
-    await api('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email: email.value, password: password.value }),
-    });
+    const result = await api<{ passwordChangeRequired: boolean }>(
+      '/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email: email.value, password: password.value }),
+      },
+    );
     password.value = '';
+    if (result.passwordChangeRequired) {
+      setApiCompany(null);
+      recoveryMode.value = 'required';
+      return;
+    }
     me.value = await api<UserContext>('/me');
     setApiCompany(me.value.companyId);
     await router.replace(me.value.company.isParent ? '/group' : '/crm');
@@ -701,6 +711,13 @@ onMounted(async () => {
     .then((v) => (oidcAvailable.value = v.oidc))
     .catch(() => {});
   try {
+    const reset = await api<{ passwordChangeRequired: boolean }>(
+      '/auth/password-reset/status',
+    );
+    if (reset.passwordChangeRequired) {
+      recoveryMode.value = 'required';
+      return;
+    }
     me.value = await api<UserContext>('/me');
     setApiCompany(me.value.companyId);
     await load();
@@ -751,7 +768,23 @@ onUnmounted(() => {
       <p>Inteligência em licitações para as empresas do grupo NTHUB.</p>
       <span class="login-footer">NTHub / PORTAL DE LICITAÇÕES</span>
     </div>
-    <form @submit.prevent="login" class="login-form">
+    <PasswordRecovery
+      v-if="recoveryMode"
+      :key="recoveryMode"
+      :required="recoveryMode === 'required'"
+      :initial-email="email"
+      @back="
+        recoveryMode = null;
+        error = '';
+        notice = '';
+      "
+      @complete="
+        recoveryMode = null;
+        error = '';
+        notice = 'Senha alterada. Entre com sua nova senha.';
+      "
+    />
+    <form v-else @submit.prevent="login" class="login-form">
       <span class="eyebrow">BEM-VINDO AO NTHUB</span>
       <h2>Acesse seu espaço</h2>
       <a
@@ -775,10 +808,24 @@ onUnmounted(() => {
           required
       /></label>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
+      <p v-if="notice" class="notice" role="status">{{ notice }}</p>
       <button class="primary" :disabled="busy || processing">
         {{ busy ? 'Entrando…' : 'Entrar no portal' }}
-        <ArrowUpRight :size="17" /></button
-      ><small
+        <ArrowUpRight :size="17" />
+      </button>
+      <button
+        type="button"
+        class="secondary"
+        :disabled="busy"
+        @click="
+          recoveryMode = 'forgot';
+          error = '';
+          notice = '';
+        "
+      >
+        Esqueci minha senha
+      </button>
+      <small
         ><ShieldCheck :size="14" /> Ambiente corporativo · acesso
         restrito</small
       >

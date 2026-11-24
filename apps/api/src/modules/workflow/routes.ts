@@ -501,7 +501,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     if (!user || !verifyPassword(body.currentPassword, user.password_hash))
       throw httpError(400, 'Senha atual inválida.');
     await sql.begin(async (tx) => {
-      await tx`UPDATE users SET password_hash=${hashPassword(body.newPassword)} WHERE id=${t.userId}`;
+      await tx`UPDATE users SET password_hash=${hashPassword(body.newPassword)},temporary_password_hash=NULL,temporary_password_expires_at=NULL,reset_used_password_hash=NULL WHERE id=${t.userId}`;
       await tx`DELETE FROM sessions WHERE user_id=${t.userId}`;
       await tx`INSERT INTO audit_logs(id,organization_id,company_id,user_id,action,resource_id) VALUES(${randomUUID()},${t.organizationId},${t.companyId},${t.userId},'profile:password-changed',${t.userId})`;
     });

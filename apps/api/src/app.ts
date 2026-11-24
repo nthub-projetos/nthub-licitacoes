@@ -1,4 +1,5 @@
 import { oidcRoutes } from './modules/identity/oidc.js';
+import { passwordResetRoutes } from './modules/identity/password-reset.js';
 import { loadBlob } from './core/storage.js';
 import Fastify from 'fastify';
 import swagger from '@fastify/swagger';
@@ -90,6 +91,9 @@ export async function buildApp() {
       [
         '/api/v1/health',
         '/api/v1/auth/login',
+        '/api/v1/auth/forgot-password',
+        '/api/v1/auth/password-reset/status',
+        '/api/v1/auth/password-reset/complete',
         '/api/v1/auth/options',
         '/api/v1/auth/oidc/start',
         '/api/v1/auth/oidc/callback',
@@ -171,6 +175,7 @@ export async function buildApp() {
     });
   });
   await oidcRoutes(app);
+  await passwordResetRoutes(app);
   app.get('/api/v1/health', async () => {
     await sql`SELECT 1`;
     await queue.waitUntilReady();
@@ -183,31 +188,42 @@ export async function buildApp() {
       const body = z
         .object({ email: z.email(), password: z.string().min(1).max(256) })
         .parse(req.body);
-      const [user] =
-        await sql`SELECT * FROM users WHERE email=${body.email.toLowerCase()}`;
-      if (
-        !user ||
-        !user.active ||
-        !verifyPassword(body.password, user.password_hash)
-      )
-        return reply.code(401).send({ message: 'E-mail ou senha inválidos.' });
       const token = randomBytes(32).toString('hex');
-      const [firstCompany] =
-        await sql`SELECT c.id FROM companies c LEFT JOIN memberships m ON m.company_id=c.id AND m.organization_id=c.organization_id AND m.user_id=${user.id} AND m.active WHERE c.organization_id=${user.organization_id} AND c.active AND (${user.group_role === 'group_admin'} OR m.user_id IS NOT NULL) ORDER BY (c.id=${user.company_id}) DESC,c.is_parent DESC,c.name LIMIT 1`;
-      if (!firstCompany)
-        throw httpError(
-          403,
-          'Nenhum ambiente está autorizado para este usuário.',
-        );
-      await sql`INSERT INTO sessions(token_hash,user_id,expires_at,active_company_id) VALUES(${hashToken(token)},${user.id},now()+interval '12 hours',${firstCompany.id})`;
+      const passwordChangeRequired = await sql.begin(async (tx) => {
+        const [user] =
+          await tx`SELECT * FROM users WHERE email=${body.email.toLowerCase()} FOR UPDATE`;
+        if (!user || !user.active)
+          throw httpError(401, 'E-mail ou senha inválidos.');
+        const regular = verifyPassword(body.password, user.password_hash);
+        const temporary =
+          !regular &&
+          user.temporary_password_hash &&
+          new Date(user.temporary_password_expires_at).getTime() > Date.now() &&
+          verifyPassword(body.password, user.temporary_password_hash);
+        if (!regular && !temporary)
+          throw httpError(401, 'E-mail ou senha inválidos.');
+        const [firstCompany] =
+          await tx`SELECT c.id FROM companies c LEFT JOIN memberships m ON m.company_id=c.id AND m.organization_id=c.organization_id AND m.user_id=${user.id} AND m.active WHERE c.organization_id=${user.organization_id} AND c.active AND (${user.group_role === 'group_admin'} OR m.user_id IS NOT NULL) ORDER BY (c.id=${user.company_id}) DESC,c.is_parent DESC,c.name LIMIT 1`;
+        if (!firstCompany)
+          throw httpError(
+            403,
+            'Nenhum ambiente está autorizado para este usuário.',
+          );
+        if (temporary) {
+          await tx`DELETE FROM sessions WHERE user_id=${user.id} AND password_reset_only`;
+          await tx`UPDATE users SET reset_used_password_hash=temporary_password_hash,temporary_password_hash=NULL,temporary_password_expires_at=NULL WHERE id=${user.id}`;
+        }
+        await tx`INSERT INTO sessions(token_hash,user_id,expires_at,active_company_id,password_reset_only) VALUES(${hashToken(token)},${user.id},now()+(${temporary ? 900 : 43200}*interval '1 second'),${firstCompany.id},${Boolean(temporary)})`;
+        return Boolean(temporary);
+      });
       reply.setCookie('session', token, {
         httpOnly: true,
         secure: config.NODE_ENV === 'production',
         sameSite: 'strict',
         path: '/',
-        maxAge: 43200,
+        maxAge: passwordChangeRequired ? 900 : 43200,
       });
-      return { ok: true };
+      return { ok: true, passwordChangeRequired };
     },
   );
   app.post('/api/v1/auth/logout', async (req, reply) => {

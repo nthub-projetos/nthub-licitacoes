@@ -4,6 +4,8 @@ Portal multiempresa em TypeScript: Fastify, Vue 3, PostgreSQL, BullMQ/Redis e Ge
 
 ## Iniciar
 
+Para instalar no Windows e colaborar por Pull Request, siga o [guia de desenvolvimento para Derik e Deivid](docs/GUIA-DERIK-DEIVID.md).
+
 Node 24+, pnpm 11, Docker Desktop.
 
 ```powershell
