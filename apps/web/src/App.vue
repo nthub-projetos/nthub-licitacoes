@@ -41,6 +41,8 @@ import {
   Settings2,
 } from 'lucide-vue-next';
 import type {
+  CatalogQuery,
+  CatalogSummary,
   Opportunity,
   Status,
   OpportunityContent,
@@ -50,6 +52,18 @@ import type {
 import { hasPermission } from '@nthub/contracts';
 import { api, setApiCompany } from './api';
 import PasswordRecovery from './modules/PasswordRecovery.vue';
+const catalogQuery = ref<Partial<CatalogQuery>>({ page: 1, pageSize: 50 });
+const catalog = ref<{
+  total: number;
+  page: number;
+  pageSize: number;
+  summary: CatalogSummary;
+} | null>(null);
+const catalogLoading = ref(false);
+async function changeCatalog(value: Partial<CatalogQuery>) {
+  catalogQuery.value = value;
+  await run(load);
+}
 const recoveryMode = ref<'forgot' | 'required' | null>(null);
 const Permissions = defineAsyncComponent(
   () => import('./modules/Permissions.vue'),
@@ -266,6 +280,8 @@ async function switchCompany(id: string) {
     selected.value = null;
     content.value = null;
     items.value = [];
+    catalogQuery.value = { page: 1, pageSize: 50 };
+    catalog.value = null;
     audit.value = [];
     search.value = '';
     filter.value = 'all';
@@ -277,8 +293,7 @@ async function switchCompany(id: string) {
   });
 }
 async function openById(id: string) {
-  await load();
-  const item = items.value.find((o) => o.id === id);
+  const item = await api<Opportunity>('/opportunities/' + id);
   if (item) await openOpportunity(item);
   else error.value = 'Oportunidade não encontrada no ambiente atual.';
 }
@@ -388,7 +403,7 @@ async function openOpportunity(item: Opportunity) {
   });
 }
 async function refreshSource() {
-  if (!selected.value || !canAnalyze.value) return;
+  if (!selected.value || !canWrite.value) return;
   await run(async () => {
     const job = await api<{ jobId: string }>(
       '/opportunities/' + selected.value!.id + '/refresh',
@@ -505,6 +520,10 @@ const labels: Record<Status, string> = {
   lost: 'Perdida',
 };
 const view = computed(() => String(route.params.view || 'crm'));
+watch(view, () => {
+  catalogQuery.value = { page: 1, pageSize: 50 };
+  if (me.value) void run(load);
+});
 watch(
   [() => route.params.view, () => me.value?.companyId],
   () => {
@@ -547,7 +566,12 @@ const filtered = computed(() =>
   ),
 );
 const active = computed(() =>
-  items.value.filter((i) => !['discarded', 'won', 'lost'].includes(i.status)),
+  items.value.filter(
+    (i) =>
+      !['discarded', 'won', 'lost'].includes(i.status) &&
+      i.deadline &&
+      Date.parse(i.deadline) >= Date.now(),
+  ),
 );
 const expiring = computed(() =>
   active.value.filter(
@@ -575,26 +599,61 @@ async function load() {
   const revision = ++catalogRequest;
   const scope = me.value?.companyId;
   if (!scope) return;
-  const [opportunities, history, searches] = await Promise.all([
-    can('opportunities:read')
-      ? api<Opportunity[]>('/opportunities')
-      : Promise.resolve([]),
-    can('audit:read') ? api<typeof audit.value>('/audit') : Promise.resolve([]),
-    can('searches:read')
-      ? api<typeof savedSearches.value>('/saved-searches')
-      : Promise.resolve([]),
-  ]);
-  if (me.value?.companyId !== scope || revision !== catalogRequest) return;
-  items.value = opportunities;
-  crmUpdatedAt.value = new Date().toISOString();
-  audit.value = history;
-  savedSearches.value = searches;
-  if (selected.value) {
-    await loadContent(selected.value.id);
-    selected.value =
-      items.value.find((i) => i.id === selected.value?.id) || null;
+  catalogLoading.value = true;
+  const params = new URLSearchParams(
+    Object.entries(catalogQuery.value).map(([k, v]) => [k, String(v)]),
+  );
+  if (view.value !== 'crm') {
+    params.set('area', 'all');
+    params.set('search', search.value);
+    params.set('stage', filter.value);
+    params.set('deadline', 'all');
+    params.set('processing', 'all');
+  } else if (!params.has('area')) params.set('area', 'pipeline');
+  try {
+    const [result, history, searches] = await Promise.all([
+      can('opportunities:read')
+        ? api<{
+            items: Opportunity[];
+            total: number;
+            page: number;
+            pageSize: number;
+            summary: CatalogSummary;
+          }>('/opportunities/page?' + params)
+        : Promise.resolve(null),
+      can('audit:read')
+        ? api<typeof audit.value>('/audit')
+        : Promise.resolve([]),
+      can('searches:read')
+        ? api<typeof savedSearches.value>('/saved-searches')
+        : Promise.resolve([]),
+    ]);
+    if (me.value?.companyId !== scope || revision !== catalogRequest) return;
+    items.value = result?.items ?? [];
+    catalog.value = result;
+    crmUpdatedAt.value = new Date().toISOString();
+    audit.value = history;
+    savedSearches.value = searches;
+    if (selected.value) {
+      await loadContent(selected.value.id);
+      selected.value = await api<Opportunity>(
+        '/opportunities/' + selected.value.id,
+      );
+    }
+  } finally {
+    if (revision === catalogRequest) catalogLoading.value = false;
   }
 }
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+watch([search, filter], () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    if (me.value && view.value !== 'crm') {
+      catalogQuery.value.page = 1;
+      void run(load);
+    }
+  }, 300);
+});
 async function run(fn: () => Promise<void>) {
   error.value = '';
   busy.value = true;
@@ -731,6 +790,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', dialogKeys);
   document.body.style.overflow = previousOverflow;
   if (timer) clearTimeout(timer);
+  clearTimeout(searchTimer);
 });
 </script>
 <template>
@@ -883,7 +943,7 @@ onUnmounted(() => {
           :aria-label="entry.name"
           ><component :is="entry.icon" :size="18" />{{ entry.name
           }}<span v-if="entry.path === 'opportunities'" class="nav-count">{{
-            items.length
+            catalog?.summary.total ?? 0
           }}</span></RouterLink
         >
       </nav>
@@ -1012,11 +1072,40 @@ onUnmounted(() => {
           :me="me"
           :opportunities="items"
           :updated-at="crmUpdatedAt"
+          :catalog="catalog"
+          :loading="catalogLoading"
+          @query="changeCatalog"
           @open="openById"
           @refresh="load"
           @discard="requestDiscard"
           @sync="syncOpen = true"
         />
+        <nav
+          v-if="catalog && view === 'opportunities'"
+          class="catalog-pagination"
+          aria-label="Paginação das oportunidades"
+        >
+          <span
+            >{{ catalog.total }} resultados · página {{ catalog.page }} de
+            {{ Math.max(1, Math.ceil(catalog.total / catalog.pageSize)) }}</span
+          >
+          <button
+            class="secondary"
+            :disabled="catalogLoading || catalog.page <= 1"
+            @click="changeCatalog({ ...catalogQuery, page: catalog.page - 1 })"
+          >
+            Anterior
+          </button>
+          <button
+            class="secondary"
+            :disabled="
+              catalogLoading || catalog.page * catalog.pageSize >= catalog.total
+            "
+            @click="changeCatalog({ ...catalogQuery, page: catalog.page + 1 })"
+          >
+            Próxima
+          </button>
+        </nav>
         <Administration
           v-if="administrationViews.includes(view)"
           :key="me.companyId + view"
@@ -1122,32 +1211,30 @@ onUnmounted(() => {
           <div v-if="view === 'overview'" class="stats">
             <article class="stat-active">
               <span>Oportunidades ativas <ArrowUpRight :size="17" /></span
-              ><strong>{{ active.length.toString().padStart(2, '0') }}</strong
+              ><strong>{{
+                String(catalog?.summary.active ?? 0).padStart(2, '0')
+              }}</strong
               ><small>No radar da {{ companyName }}</small>
             </article>
             <article class="stat-review">
               <span>Em análise <FileText :size="17" /></span
               ><strong>{{
-                items
-                  .filter((i) => i.status === 'review')
-                  .length.toString()
-                  .padStart(2, '0')
+                String(catalog?.summary.review ?? 0).padStart(2, '0')
               }}</strong
               ><small>Em avaliação pela equipe</small>
             </article>
             <article class="stat-selected">
               <span>Selecionadas <ShieldCheck :size="17" /></span
               ><strong>{{
-                items
-                  .filter((i) => i.status === 'selected')
-                  .length.toString()
-                  .padStart(2, '0')
+                String(catalog?.summary.selected ?? 0).padStart(2, '0')
               }}</strong
               ><small>Prontas para avançar</small>
             </article>
             <article class="deadline-stat">
               <span>Prazos próximos <History :size="17" /></span
-              ><strong>{{ expiring.length.toString().padStart(2, '0') }}</strong
+              ><strong>{{
+                String(catalog?.summary.upcomingDeadlines ?? 0).padStart(2, '0')
+              }}</strong
               ><small>Encerram nos próximos 7 dias</small>
             </article>
           </div>
@@ -1174,7 +1261,7 @@ onUnmounted(() => {
                       ? 'No radar da ' + companyName
                       : 'Catálogo de oportunidades'
                   }}
-                  <span class="count">{{ items.length }}</span>
+                  <span class="count">{{ catalog?.total ?? 0 }}</span>
                 </h2>
                 <p>
                   Licitações identificadas a partir das capacidades da empresa.
@@ -1526,6 +1613,46 @@ onUnmounted(() => {
           >
             <RefreshCw :size="15" /> Atualizar informações
           </button>
+        </section>
+        <p v-if="content?.sourceChangedAt" class="notice banner" role="status">
+          Edital atualizado na fonte — revise os prazos, valores e documentos.
+          Uma nova análise de IA só será feita se você solicitar.
+        </p>
+        <section
+          v-if="content?.issues?.length"
+          class="panel processing-issues"
+          aria-label="Pendências de processamento"
+        >
+          <h3>Pendências de processamento</h3>
+          <article v-for="issue in content.issues" :key="issue.kind">
+            <strong>{{ issue.title }}</strong>
+            <p>{{ issue.action }}</p>
+            <button
+              v-if="issue.kind === 'failed' && canWrite"
+              class="secondary"
+              :disabled="busy || processing"
+              @click="refreshSource"
+            >
+              Reprocessar coleta
+            </button>
+            <button
+              v-if="
+                issue.kind === 'needs_ocr' && canAnalyze && me.geminiConfigured
+              "
+              class="secondary"
+              :disabled="busy || processing"
+              @click="analyze"
+            >
+              Analisar com IA (inclui OCR)
+            </button>
+            <a
+              v-if="['missing', 'unsupported'].includes(issue.kind)"
+              :href="selected.sourceUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Consultar fonte oficial</a
+            >
+          </article>
         </section>
         <p v-if="content?.processingError" class="notice banner source-warning">
           {{ content.processingError }}

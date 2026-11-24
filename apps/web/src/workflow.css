@@ -829,3 +829,23 @@
     rotate: 0deg;
   }
 }
+.catalog-pagination {
+  display: flex;
+  flex-direction: row;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+}
+.catalog-pagination span {
+  margin-right: auto;
+  color: var(--muted);
+}
+.processing-issues article {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.crm-toolbar {
+  flex-wrap: wrap;
+}

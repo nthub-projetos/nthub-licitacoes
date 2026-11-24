@@ -38,6 +38,36 @@ export function verifyPassword(password: string, hash: string) {
     Buffer.from(key, 'hex'),
   );
 }
+const dummyPasswordHash = hashPassword(randomBytes(32).toString('hex'));
+export function verifyLoginCredentials(
+  password: string,
+  user?: {
+    active: boolean;
+    password_hash: string;
+    temporary_password_hash?: string | null;
+    temporary_password_expires_at?: string | Date | null;
+  },
+) {
+  const temporaryValid = Boolean(
+    user?.active &&
+    user.temporary_password_hash &&
+    user.temporary_password_expires_at &&
+    new Date(user.temporary_password_expires_at).getTime() > Date.now(),
+  );
+  // Always perform two hashes, including absent/inactive accounts and absent/expired resets.
+  const regularMatch = verifyPassword(
+    password,
+    user?.active ? user.password_hash : dummyPasswordHash,
+  );
+  const temporaryMatch = verifyPassword(
+    password,
+    temporaryValid ? user!.temporary_password_hash! : dummyPasswordHash,
+  );
+  return {
+    regular: Boolean(user?.active && regularMatch),
+    temporary: Boolean(temporaryValid && temporaryMatch),
+  };
+}
 export function httpError(statusCode: number, message: string) {
   return Object.assign(new Error(message), { statusCode });
 }

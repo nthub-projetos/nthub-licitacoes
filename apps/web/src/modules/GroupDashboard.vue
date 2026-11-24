@@ -27,6 +27,9 @@ type Report = {
     lost: number;
     discarded: number;
     estimatedPipeline: string;
+    expired: number;
+    unknownDeadline: number;
+    expiredPipeline: string;
     discardedPipeline: string;
     upcomingDeadlines: number;
     proposalCount: number;
@@ -122,6 +125,14 @@ onMounted(() => void load());
         </article>
       </div>
       <section class="panel discarded-pipeline-card">
+        <p class="notice">
+          {{ data.totals.expired }} oportunidades abertas com prazo encerrado ·
+          {{ data.totals.unknownDeadline }} sem prazo informado. Fora do
+          pipeline com prazo vigente.
+        </p>
+        <p>
+          Valor com prazo encerrado: {{ money(data.totals.expiredPipeline) }}
+        </p>
         <span class="eyebrow">OPORTUNIDADES DESCARTADAS</span>
         <h2>Pipeline de valor descartado</h2>
         <strong class="pipeline-value">{{

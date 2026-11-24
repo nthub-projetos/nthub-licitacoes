@@ -21,11 +21,11 @@ O seed mantém senhas, decisões e critérios já editados. O administrador é `
 
 ### Recuperação de senha
 
-Na tela de login, **Esqueci minha senha** solicita o e-mail cadastrado. Contas ativas recebem uma senha temporária pelo SMTP configurado, com validade de 30 minutos e uso único. A resposta pública é a mesma para e-mails existentes e inexistentes. O envio tem limite por IP e intervalo mínimo de um minuto por conta; não depende de preferências de notificações nem do worker.
+Na tela de login, **Esqueci minha senha** solicita o e-mail cadastrado. Contas ativas recebem uma senha temporária pelo SMTP configurado, com validade de 30 minutos e uso único. A resposta pública é a mesma para e-mails existentes e inexistentes. O envio tem limite por IP e intervalo mínimo de um minuto por conta; não depende de preferências de notificações. Redis e o worker devem estar ativos para a entrega. A resposta pública apenas enfileira o endereço, com o mesmo fluxo para contas existentes e inexistentes; a consulta, geração e entrega ocorrem em segundo plano. A senha temporária não é gravada em texto puro na fila.
 
 O login com a senha temporária cria uma sessão restrita de 15 minutos, que permite apenas cadastrar uma nova senha ou sair. O restante da API continua bloqueado, inclusive após recarregar a página. A nova senha exige pelo menos 12 caracteres, confirmação e deve ser diferente da anterior e da temporária. Ao concluir, todas as sessões da conta são encerradas e o usuário entra novamente com a nova senha. A conclusão fica registrada na auditoria, sem credenciais.
 
-Uma solicitação não altera a senha atual; ela permanece válida até a conclusão. Reenviar a recuperação substitui a senha temporária anterior e cancela a sessão de redefinição pendente. Falhas de SMTP preservam as credenciais existentes e geram um aviso genérico nos logs. Somente hashes das senhas são armazenados no banco.
+Uma solicitação não altera a senha atual; ela permanece válida até a conclusão. Reenviar a recuperação substitui a senha temporária anterior e cancela a sessão de redefinição pendente. Falhas de SMTP preservam as credenciais existentes, geram aviso genérico nos logs do worker e são retomadas até três vezes. O envio não bloqueia a linha do usuário durante o acesso SMTP; uma alteração de senha ou desativação durante o envio impede a publicação da credencial temporária. O login executa duas verificações de hash também para contas inexistentes, inativas e sem senha temporária válida. Somente hashes das senhas são armazenados no banco.
 
 O desenvolvimento pode usar Mailpit. No Ubuntu, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` e `SMTP_FROM`, além de `APP_URL` com o endereço acessível pelos usuários. A migração `pnpm db:migrate`, também executada pelo atualizador manual, adiciona os campos necessários sem modificar senhas existentes.
 
@@ -59,7 +59,7 @@ Backup: suspenda worker e mutações; gere dump PostgreSQL em formato custom, sn
 
 Implementados: multiempresa/RBAC, cadastro e convite, critérios por empresa, PNCP, checkpoints/versões, outbox/worker, originais PDF/TXT/CSV/ZIP, OCR Gemini, análise com referências validadas, atribuições/comentários, propostas/resultados, documentos/tarefas, notificações, agendamento, indicadores/exportação, auditoria, tokens/webhooks, OpenAPI e login OIDC opcional.
 
-Dependem de configuração externa: domínio/TLS, IdP, SMTP de produção, infraestrutura redundante e retenção de backups. Fontes regionais/PCA e conectores adicionais exigem escopo de cobertura próprio. DOCX/planilhas não têm extração textual automática neste incremento; originais continuam disponíveis. A página OCR se baseia em transcrição e demanda conferência humana. A IA não decide habilitação jurídica nem garante conformidade. O catálogo inicial limita a listagem a mil oportunidades; indicadores consolidados consultam toda a base. Esses limites devem ser tratados antes de ampliar cobertura e volume.
+Dependem de configuração externa: domínio/TLS, IdP, SMTP de produção, infraestrutura redundante e retenção de backups. Fontes regionais/PCA e conectores adicionais exigem escopo de cobertura próprio. DOCX/planilhas não têm extração textual automática neste incremento; originais continuam disponíveis. A página OCR se baseia em transcrição e demanda conferência humana. A IA não decide habilitação jurídica nem garante conformidade. O CRM usa paginação e busca no servidor, com totais calculados sobre toda a empresa. A rota legada de integração `/opportunities` mantém seu limite de mil registros; utilize `/opportunities/page` para percorrer o catálogo completo. Esses limites devem ser tratados antes de ampliar cobertura e volume.
 
 
 ## PNCP e Compras.gov.br: sincronização e limites
@@ -85,7 +85,7 @@ Referências: [Swagger Compras.gov.br](https://dadosabertos.compras.gov.br/swagg
 
 ## CRM de oportunidades
 
-O caminho `/crm` é o funil operacional de cada empresa operacional e o destino inicial dos ambientes de operação. A matriz mantém a visão consolidada do grupo. As etapas são Novas, Em análise, Selecionadas, Proposta enviada, Vencidas, Perdidas e Descartadas. A coleta insere a oportunidade em Novas antes de baixar ou analisar os anexos. O CRM consulta novas informações a cada quatro segundos enquanto a aba está visível; não é necessário esperar o Gemini terminar.
+O caminho `/crm` é o funil operacional de cada empresa operacional e o destino inicial dos ambientes de operação. A matriz mantém a visão consolidada do grupo. As etapas são Novas, Em análise, Selecionadas, Proposta enviada, Vencidas, Perdidas e Descartadas. A coleta insere a oportunidade em Novas antes de baixar ou analisar os anexos. A tela do CRM é atualizada manualmente; a coleta segue o intervalo configurado por empresa e não depende de análise por IA.
 
 Use o seletor de etapa de cada cartão ou arraste o cartão entre colunas. O mesmo controle funciona por teclado e em tela de toque. Atribuição de responsável, comentários, evidências, documentos e participação ficam no detalhamento do cartão. Todas as etapas, inclusive Vencidas (licitações ganhas), Perdidas e Descartadas, aparecem no quadro. As mudanças continuam respeitando os perfis, as atribuições e a empresa autorizada, gerando auditoria. A sincronização não altera a decisão tomada pela equipe. O valor de pipeline é uma soma de estimativas publicadas, não receita contratada.
 
@@ -124,3 +124,14 @@ Os cards do CRM respondem imediatamente à troca de etapa. O card passa acima da
 
 
 O arraste do CRM usa SortableJS com o card elevado e levemente inclinado, espaço reservado na coluna e reorganização dos vizinhos durante o gesto. A ordem visual escolhida fica salva neste navegador por empresa. O seletor de etapas continua disponível para teclado; movimento reduzido remove inclinação e reorganização animada.
+
+
+### Prazos, revisão das fontes e pendências
+
+O pipeline com prazo vigente inclui somente oportunidades em etapas abertas com data de encerramento futura ou atual. Prazos encerrados e ausentes são identificados separadamente; não alteram automaticamente a etapa nem tornam a licitação perdida. Os indicadores de empresa e grupo usam a mesma regra. No CRM, filtre por prazo, etapa, texto ou situação de processamento. Os totais dos cards consideram a empresa inteira; as contagens das colunas correspondem à página exibida.
+
+A cada rodada agendada, as oportunidades abertas são revisitadas diretamente pelo identificador PNCP, independentemente da data de publicação. O sistema confere metadados, itens e anexos; alterações de prazo, objeto, órgão, valor ou anexos geram aviso de revisão e histórico. A atualização manual do card usa o mesmo fluxo. Trabalhos já enfileirados não são duplicados e essa rotina não solicita IA. Análises afetadas por mudanças de metadados são preservadas no histórico, deixando de ser exibidas como atuais.
+
+As pendências diferenciam fila/processamento, falha reprocessável, OCR aguardando solicitação, formato sem leitura automática e ausência de anexos na fonte. Reprocessar coleta não executa IA. O botão de análise com OCR continua sujeito às permissões e à solicitação explícita.
+
+A API só interpreta cabeçalhos de IP encaminhado quando o endereço do proxy está na lista `TRUSTED_PROXY_CIDRS`. No Compose Ubuntu, a API permanece interna e o Nginx substitui `X-Forwarded-For` pelo endereço do cliente recebido, evitando aceitar cadeias enviadas pelo navegador. Em outra topologia, configure apenas as redes dos proxies autorizados.

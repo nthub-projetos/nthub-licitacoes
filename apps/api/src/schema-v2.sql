@@ -87,3 +87,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_expires_at timesta
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_requested_at timestamptz;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_used_password_hash text;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS password_reset_only boolean NOT NULL DEFAULT false;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS source_changed_at timestamptz;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS source_checked_at timestamptz;
+CREATE INDEX IF NOT EXISTS opportunities_catalog_page ON opportunities(organization_id,company_id,created_at DESC,id DESC);

@@ -8,6 +8,7 @@ import {
   UserRound,
 } from 'lucide-vue-next';
 import type { Opportunity, Status, UserContext } from '@nthub/contracts';
+import type { CatalogQuery, CatalogSummary } from '@nthub/contracts';
 import { hasPermission } from '@nthub/contracts';
 import { api } from '../api';
 import Sortable from 'sortablejs';
@@ -15,12 +16,20 @@ const props = defineProps<{
   me: UserContext;
   opportunities: Opportunity[];
   updatedAt: string | null;
+  catalog: {
+    total: number;
+    page: number;
+    pageSize: number;
+    summary: CatalogSummary;
+  } | null;
+  loading: boolean;
 }>();
 const emit = defineEmits<{
   open: [id: string];
   refresh: [];
   sync: [];
   discard: [id: string];
+  query: [value: Partial<CatalogQuery>];
 }>();
 const board = ref<HTMLElement | null>(null),
   optimistic = ref<Record<string, Status>>({}),
@@ -176,7 +185,7 @@ function setupSorting() {
         group: 'crm-' + props.me.companyId,
         draggable: '.crm-card',
         dataIdAttr: 'data-card-id',
-        disabled: !canWrite.value || !!pending.value,
+        disabled: !canWrite.value || !!pending.value || props.loading,
         animation: reduced ? 0 : 180,
         easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
         forceFallback: true,
@@ -265,18 +274,31 @@ const stages: { id: Status; label: string; hint: string }[] = [
 const canWrite = computed(() => hasPermission(props.me, 'opportunities:write'));
 const canSync = computed(() => hasPermission(props.me, 'sources:sync'));
 watch([() => area.value, () => stage.value], () => nextTick(setupSorting));
-watch([canWrite, pending], () =>
+watch([canWrite, pending, () => props.loading], () =>
   sortables.forEach((s) =>
-    s.option('disabled', !canWrite.value || !!pending.value),
+    s.option('disabled', !canWrite.value || !!pending.value || props.loading),
   ),
 );
-const filtered = computed(() =>
-  displayed.value.filter((o) =>
-    `${o.title} ${o.agency} ${o.city || ''} ${o.assignedName || ''}`
-      .toLocaleLowerCase('pt-BR')
-      .includes(query.value.toLocaleLowerCase('pt-BR')),
-  ),
-);
+const filtered = computed(() => displayed.value);
+const deadlineFilter = ref('all'),
+  processingFilter = ref('all');
+let filterTimer: ReturnType<typeof setTimeout> | undefined;
+function searchPage(page = 1) {
+  emit('query', {
+    search: query.value,
+    stage: stage.value as CatalogQuery['stage'],
+    area: area.value as CatalogQuery['area'],
+    deadline: deadlineFilter.value as CatalogQuery['deadline'],
+    processing: processingFilter.value as CatalogQuery['processing'],
+    page,
+    pageSize: 50,
+  });
+}
+watch([query, stage, area, deadlineFilter, processingFilter], () => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => searchPage(), 300);
+});
+onUnmounted(() => clearTimeout(filterTimer));
 const visibleStages = computed(() =>
   stages.filter((s) =>
     area.value === 'discarded'
@@ -308,7 +330,7 @@ const progress: Record<string, string> = {
   ready: 'Documentos disponíveis',
 };
 async function move(id: string, status: Status, animate = pointerMotion.value) {
-  if (!canWrite.value || pending.value) return;
+  if (!canWrite.value || pending.value || props.loading) return;
   const item = displayed.value.find((o) => o.id === id);
   if (!item || item.status === status) return;
   if (status === 'discarded') {
@@ -377,21 +399,27 @@ function changeStage(event: Event, item: Opportunity) {
     </div>
     <div class="crm-stats">
       <article>
-        <span>Em andamento</span><strong>{{ active.length }}</strong>
+        <span>Em andamento · prazo vigente</span
+        ><strong>{{ catalog?.summary.active ?? 0 }}</strong>
       </article>
       <article>
         <span>Novas identificações</span
-        ><strong>{{
-          displayed.filter((o) => o.status === 'new').length
-        }}</strong>
+        ><strong>{{ catalog?.summary.new ?? 0 }}</strong>
       </article>
       <article>
         <span>Pipeline estimado</span
-        ><strong>{{
-          money(String(active.reduce((n, o) => n + Number(o.value || 0), 0)))
-        }}</strong>
+        ><strong>{{ money(catalog?.summary.estimatedPipeline ?? '0') }}</strong>
       </article>
     </div>
+    <p
+      class="notice banner"
+      v-if="catalog?.summary.expired || catalog?.summary.unknownDeadline"
+    >
+      {{ catalog?.summary.expired ?? 0 }} oportunidades abertas com prazo
+      encerrado · {{ catalog?.summary.unknownDeadline ?? 0 }} sem prazo
+      informado. Esses valores não integram o pipeline com prazo vigente. Prazo
+      encerrado não significa licitação perdida.
+    </p>
     <p class="muted crm-live">
       <span v-if="updatedAt">
         Última atualização:
@@ -421,7 +449,7 @@ function changeStage(event: Event, item: Opportunity) {
         "
       >
         Descartadas ·
-        {{ opportunities.filter((o) => o.status === 'discarded').length }}
+        {{ catalog?.summary.discarded ?? 0 }}
       </button>
     </nav>
     <div class="crm-toolbar">
@@ -442,13 +470,70 @@ function changeStage(event: Event, item: Opportunity) {
           </option>
         </select></label
       >
+      <label
+        >Prazo<select v-model="deadlineFilter">
+          <option value="all">Todos os prazos</option>
+          <option value="open">Prazo vigente</option>
+          <option value="expired">Prazo encerrado</option>
+          <option value="unknown">Sem prazo informado</option>
+        </select></label
+      >
+      <label
+        >Processamento<select v-model="processingFilter">
+          <option value="all">Todas as situações</option>
+          <option value="pending">Na fila / processando</option>
+          <option value="failed">Falha — reprocessar</option>
+          <option value="needs_ocr">Aguardando OCR</option>
+          <option value="unsupported">Sem leitura automática</option>
+          <option value="missing">Sem anexos na fonte</option>
+          <option value="ready">Documentos disponíveis</option>
+        </select></label
+      >
     </div>
-    <div v-if="!opportunities.length" class="panel empty compact-empty">
-      <h2>O funil está pronto para receber oportunidades</h2>
+    <nav
+      class="catalog-pagination"
+      aria-label="Paginação do CRM"
+      :aria-busy="loading"
+    >
+      <span
+        >{{ catalog?.total ?? 0 }} resultados · página
+        {{ catalog?.page ?? 1 }} de
+        {{
+          Math.max(
+            1,
+            Math.ceil((catalog?.total ?? 0) / (catalog?.pageSize ?? 50)),
+          )
+        }}
+        · contagens das colunas nesta página</span
+      >
+      <button
+        class="secondary"
+        :disabled="loading || !catalog || catalog.page <= 1"
+        @click="searchPage(catalog!.page - 1)"
+      >
+        Anterior
+      </button>
+      <button
+        class="secondary"
+        :disabled="
+          loading ||
+          !catalog ||
+          catalog.page * catalog.pageSize >= catalog.total
+        "
+        @click="searchPage(catalog!.page + 1)"
+      >
+        Próxima
+      </button>
+    </nav>
+    <div
+      v-if="!opportunities.length && !loading"
+      class="panel empty compact-empty"
+    >
+      <h2>Nenhuma oportunidade encontrada</h2>
       <p>
-        Sincronize as fontes ou ative uma coleta recorrente em Configurações →
-        Fontes e coletas. Os editais aparecem aqui antes da conclusão da
-        análise.
+        Revise os filtros ou sincronize as fontes. Configure a coleta em
+        Configurações → Fontes e coletas. Os editais aparecem aqui antes da
+        conclusão da análise.
       </p>
     </div>
     <div
@@ -517,6 +602,15 @@ function changeStage(event: Event, item: Opportunity) {
             <p class="crm-meta">
               <Clock3 :size="14" />{{ date(item.deadline) }}
             </p>
+            <p v-if="item.deadlineState === 'expired'" class="notice">
+              Prazo encerrado — conferir prorrogação
+            </p>
+            <p v-if="item.deadlineState === 'unknown'" class="muted">
+              Prazo não informado pela fonte
+            </p>
+            <p v-if="item.sourceChangedAt" class="notice">
+              Edital atualizado — revisar informações
+            </p>
             <p class="crm-meta">
               <UserRound :size="14" />{{
                 item.assignedName || 'Sem responsável'
@@ -540,7 +634,7 @@ function changeStage(event: Event, item: Opportunity) {
                   >Etapa da oportunidade {{ item.agency }}</span
                 ><select
                   :value="item.status"
-                  :disabled="!canWrite || !!pending"
+                  :disabled="!canWrite || !!pending || loading"
                   @change="changeStage($event, item)"
                 >
                   <option v-for="s in stages" :key="s.id" :value="s.id">

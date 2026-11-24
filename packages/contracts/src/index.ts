@@ -1,6 +1,7 @@
 import { adherenceSchema } from './adherence.js';
 export * from './adherence.js';
 import { z } from 'zod';
+export * from './catalog.js';
 export * from './management.js';
 export const statuses = [
   'new',
@@ -54,6 +55,8 @@ export const analysisSchema = z.object({
 export type Assessment = z.infer<typeof analysisSchema>;
 export type Status = z.infer<typeof statusSchema>;
 export interface Opportunity {
+  sourceChangedAt?: string | null;
+  deadlineState?: 'open' | 'expired' | 'unknown';
   decisionReason?: string | null;
   sources?: ('pncp' | 'compras')[];
   assignedUserId?: string | null;
@@ -100,6 +103,8 @@ export interface ProcurementItem {
   situacaoCompraItemNome?: string | null;
 }
 export interface OpportunityContent {
+  sourceChangedAt?: string | null;
+  issues?: import('./catalog.js').ProcessingIssue[];
   origins?: { source: 'pncp' | 'compras'; url: string }[];
   documents: SourceDocument[];
   items: ProcurementItem[];
