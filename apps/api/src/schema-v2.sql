@@ -82,3 +82,8 @@ DO $$ DECLARE relation record; BEGIN
  END LOOP;
 END $$;
 CREATE TABLE IF NOT EXISTS opportunity_routes(organization_id uuid NOT NULL,procurement_id uuid NOT NULL REFERENCES procurements(id),excluded_company_id uuid NOT NULL,destination_company_id uuid NOT NULL,PRIMARY KEY(organization_id,procurement_id,excluded_company_id),FOREIGN KEY(excluded_company_id,organization_id) REFERENCES companies(id,organization_id),FOREIGN KEY(destination_company_id,organization_id) REFERENCES companies(id,organization_id));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_hash text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_expires_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_requested_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_used_password_hash text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS password_reset_only boolean NOT NULL DEFAULT false;

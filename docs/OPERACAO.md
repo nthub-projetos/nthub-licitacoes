@@ -19,6 +19,16 @@ O seed mantém senhas, decisões e critérios já editados. O administrador é `
 
 ## Uso
 
+### Recuperação de senha
+
+Na tela de login, **Esqueci minha senha** solicita o e-mail cadastrado. Contas ativas recebem uma senha temporária pelo SMTP configurado, com validade de 30 minutos e uso único. A resposta pública é a mesma para e-mails existentes e inexistentes. O envio tem limite por IP e intervalo mínimo de um minuto por conta; não depende de preferências de notificações nem do worker.
+
+O login com a senha temporária cria uma sessão restrita de 15 minutos, que permite apenas cadastrar uma nova senha ou sair. O restante da API continua bloqueado, inclusive após recarregar a página. A nova senha exige pelo menos 12 caracteres, confirmação e deve ser diferente da anterior e da temporária. Ao concluir, todas as sessões da conta são encerradas e o usuário entra novamente com a nova senha. A conclusão fica registrada na auditoria, sem credenciais.
+
+Uma solicitação não altera a senha atual; ela permanece válida até a conclusão. Reenviar a recuperação substitui a senha temporária anterior e cancela a sessão de redefinição pendente. Falhas de SMTP preservam as credenciais existentes e geram um aviso genérico nos logs. Somente hashes das senhas são armazenados no banco.
+
+O desenvolvimento pode usar Mailpit. No Ubuntu, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD` e `SMTP_FROM`, além de `APP_URL` com o endereço acessível pelos usuários. A migração `pnpm db:migrate`, também executada pelo atualizador manual, adiciona os campos necessários sem modificar senhas existentes.
+
 Escolha a empresa no seletor. A matriz NTHUB tem painel consolidado e cadastro de empresas. Cada empresa operacional possui marca, critérios, funcionários, oportunidades, propostas, contatos, tarefas, alertas e auditoria próprios. A NTHUB funciona como ambiente de gestão, sem CRM, com indicadores consolidados e filtro por empresa. Um edital público pode gerar oportunidades independentes em empresas diferentes.
 
 Em **Empresa e critérios**, edite termos positivos, negativos, termos obrigatórios alternativos, UF, valores e prazos. **Reclassificar catálogo** reaplica as regras e preserva decisões existentes. O catálogo é compartilhado; nenhuma proposta, documento interno, comentário ou decisão é compartilhada por isso.

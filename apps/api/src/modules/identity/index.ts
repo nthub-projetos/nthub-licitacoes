@@ -97,7 +97,7 @@ async function resolveAuthentication(request: FastifyRequest): Promise<Tenant> {
   const token = request.cookies.session;
   if (!token) throw httpError(401, 'Entre na sua conta para continuar.');
   const [user] =
-    await sql`SELECT u.id,u.organization_id,u.email,u.name,u.group_role,coalesce(${requestedCompany || null}::uuid,s.active_company_id,u.company_id) AS company_id,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN companies c ON c.id=coalesce(${requestedCompany || null}::uuid,s.active_company_id,u.company_id) AND c.organization_id=u.organization_id AND c.active LEFT JOIN memberships m ON m.user_id=u.id AND m.company_id=c.id AND m.organization_id=u.organization_id AND m.active WHERE s.token_hash=${hashToken(token)} AND s.expires_at>now() AND u.active AND (u.group_role='group_admin' OR m.user_id IS NOT NULL)`;
+    await sql`SELECT u.id,u.organization_id,u.email,u.name,u.group_role,coalesce(${requestedCompany || null}::uuid,s.active_company_id,u.company_id) AS company_id,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN companies c ON c.id=coalesce(${requestedCompany || null}::uuid,s.active_company_id,u.company_id) AND c.organization_id=u.organization_id AND c.active LEFT JOIN memberships m ON m.user_id=u.id AND m.company_id=c.id AND m.organization_id=u.organization_id AND m.active WHERE s.token_hash=${hashToken(token)} AND s.expires_at>now() AND NOT s.password_reset_only AND u.active AND (u.group_role='group_admin' OR m.user_id IS NOT NULL)`;
   if (!user)
     throw httpError(401, 'Sessão expirada ou acesso à empresa revogado.');
   const permissions = await membershipPermissions(
