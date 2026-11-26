@@ -6,6 +6,8 @@ import {
   ArrowUpRight,
   Clock3,
   UserRound,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-vue-next';
 import type { Opportunity, Status, UserContext } from '@nthub/contracts';
 import type { CatalogQuery, CatalogSummary } from '@nthub/contracts';
@@ -35,6 +37,35 @@ const board = ref<HTMLElement | null>(null),
   optimistic = ref<Record<string, Status>>({}),
   dropTarget = ref<Status | null>(null),
   pointerMotion = ref(false);
+const boardOverflow = ref(false),
+  canScrollBack = ref(false),
+  canScrollForward = ref(false);
+function measureBoard() {
+  const el = board.value;
+  if (!el) return;
+  boardOverflow.value = el.scrollWidth > el.clientWidth + 1;
+  canScrollBack.value = el.scrollLeft > 1;
+  canScrollForward.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+}
+function scrollColumns(direction: number) {
+  const el = board.value,
+    column = el?.querySelector<HTMLElement>('.crm-column');
+  if (!el || !column) return;
+  el.scrollBy({
+    left:
+      direction *
+      (column.offsetWidth + (parseFloat(getComputedStyle(el).columnGap) || 0)),
+    behavior: 'instant',
+  });
+  measureBoard();
+}
+let boardResize: ResizeObserver | undefined;
+onMounted(() => {
+  measureBoard();
+  boardResize = new ResizeObserver(measureBoard);
+  if (board.value) boardResize.observe(board.value);
+});
+onUnmounted(() => boardResize?.disconnect());
 const displayed = computed(() =>
   props.opportunities.map((o) => ({
     ...o,
@@ -273,7 +304,12 @@ const stages: { id: Status; label: string; hint: string }[] = [
 ];
 const canWrite = computed(() => hasPermission(props.me, 'opportunities:write'));
 const canSync = computed(() => hasPermission(props.me, 'sources:sync'));
-watch([() => area.value, () => stage.value], () => nextTick(setupSorting));
+watch([() => area.value, () => stage.value], () =>
+  nextTick(() => {
+    setupSorting();
+    measureBoard();
+  }),
+);
 watch([canWrite, pending, () => props.loading], () =>
   sortables.forEach((s) =>
     s.option('disabled', !canWrite.value || !!pending.value || props.loading),
@@ -537,8 +573,36 @@ function changeStage(event: Event, item: Opportunity) {
       </p>
     </div>
     <div
+      v-if="boardOverflow"
+      class="crm-scroll-controls"
+      aria-label="Navegar pelas etapas do CRM"
+    >
+      <span>Mais etapas na horizontal</span>
+      <button
+        type="button"
+        class="secondary"
+        :disabled="!canScrollBack"
+        @click="scrollColumns(-1)"
+        aria-label="Etapas anteriores"
+      >
+        <ChevronLeft :size="16" /> Anteriores
+      </button>
+      <button
+        type="button"
+        class="secondary"
+        :disabled="!canScrollForward"
+        @click="scrollColumns(1)"
+        aria-label="Próximas etapas"
+      >
+        Próximas <ChevronRight :size="16" />
+      </button>
+    </div>
+    <div
       ref="board"
       class="crm-board"
+      tabindex="0"
+      role="region"
+      @scroll.passive="measureBoard"
       @pointerdown.capture="pointerMotion = true"
       @keydown.capture="pointerMotion = false"
       :class="{ 'crm-discarded-area': area === 'discarded' }"
