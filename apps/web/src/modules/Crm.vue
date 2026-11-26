@@ -600,12 +600,16 @@ function changeStage(event: Event, item: Opportunity) {
     <div
       ref="board"
       class="crm-board"
+      :style="{ '--crm-stage-count': visibleStages.length }"
       tabindex="0"
       role="region"
       @scroll.passive="measureBoard"
       @pointerdown.capture="pointerMotion = true"
       @keydown.capture="pointerMotion = false"
-      :class="{ 'crm-discarded-area': area === 'discarded' }"
+      :class="{
+        'crm-discarded-area': area === 'discarded',
+        'crm-single-stage': visibleStages.length === 1,
+      }"
       :aria-label="
         area === 'discarded'
           ? 'Oportunidades descartadas'
